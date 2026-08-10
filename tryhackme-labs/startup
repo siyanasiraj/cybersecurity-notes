@@ -1,0 +1,257 @@
+TryHackMe — Startup
+
+Platform: TryHackMe
+Difficulty: Easy
+Category: Linux / FTP / Web / Privilege Escalation
+Target: `10.49.189.85`
+
+---
+
+ 1. Reconnaissance
+
+I started with an Nmap scan to identify the services running on the target: nmap -sV -sC -Pn -T4 10.49.189.85
+
+The scan revealed an FTP service running **vsFTPd 3.0.3** and a web server
+
+ 2. FTP Enumeration
+
+I connected to the FTP service:
+ftp 10.49.189.85
+
+Anonymous login was enabled:
+After logging in, I listed the available files:
+ftp> ls
+I found:
+
+ftp/
+important.jpg
+notice.txt
+
+
+I downloaded the files:mget *
+
+3. Uploading a Web Shell
+
+The FTP directory was writable. This allowed a PHP web shell to be uploaded into the web-accessible FTP directory.
+After uploading the shell, I started a Netcat listener on Kali:
+
+nc -lvnp 4444 
+
+I then accessed the uploaded shell through the web server.
+A connection was received:
+connect to [192.168.129.177] from (UNKNOWN) [10.49.189.85]
+
+I checked the current user:
+whoami
+Output:
+www-data
+So I had obtained an initial shell as the low-privileged `www-data` user.
+
+---
+
+4. Stabilizing the Shell
+
+The initial shell did not provide proper terminal functionality.
+I upgraded it using Python:
+python -c 'import pty; pty.spawn("/bin/bash")'
+Then:
+export TERM=xterm
+This provided a more usable Bash shell.
+
+---
+
+5. Local Enumeration
+
+I checked the `/home` directory:
+cd /home
+ls -la
+I found a user named: lennie
+However, `www-data` did not have permission to access Lennie's home directory.
+
+I also discovered:
+/recipe.txt
+/incidents/
+The recipe contained:
+Someone asked what our main ingredient to our spice soup is today. I figured I can't keep it a secret forever and told him it was love.
+The `/incidents` directory contained a suspicious packet capture:
+suspicious.pcapng
+---
+
+6. Analyzing the PCAP
+
+The PCAP contained network traffic and several interesting HTTP requests.
+One particularly important request was:
+GET /files/ftp/shell.php HTTP/1.1
+The capture also contained a password.
+
+I suspected this credential could belong to the `lennie` user.
+I tested it with: su lennie
+Using the discovered password successfully switched the shell to Lennie.
+I verified:
+whoami
+Output: lennie
+
+---
+
+7. Getting the User Flag
+
+I entered Lennie's home directory:
+
+cd /home/lennie
+ls
+The directory contained:
+
+Documents
+scripts
+user.txt
+I retrieved the user flag:
+cat user.txt
+---
+
+8. Privilege Escalation
+
+After obtaining the user flag, I inspected Lennie's `scripts` directory:
+cd ~/scripts
+ls -la
+I found:
+
+planner.sh
+startup_list.txt
+
+I inspected planner.sh:
+cat planner.sh
+It contained:
+#!/bin/bash
+echo $LIST > /home/lennie/scripts/startup_list.txt
+/etc/print.sh
+
+The important part was: /etc/print.sh
+
+
+I checked the permissions:
+Output:
+-rwx------ 1 lennie lennie 25 Nov 12 2020 /etc/print.sh
+This was significant because **Lennie owned `/etc/print.sh` and could modify it**.
+
+---
+
+9. Modifying `print.sh`
+
+Because the reverse shell did not handle interactive editors such as `nano` properly, I modified the file directly from the shell.
+I replaced its contents with a Bash reverse shell pointing back to my Kali machine:
+I verified the file:
+cat /etc/print.sh
+
+---
+
+ 10. Receiving the Root Shell
+
+On Kali, I started a listener: nc -lnvp port number
+
+When the vulnerable script was executed with elevated privileges, the modified `/etc/print.sh` was executed and connected back to my listener.
+I received the shell and checked my privileges: whoami
+Output
+root
+I had successfully escalated from:
+www-data
+    ↓
+lennie
+    ↓
+root
+---
+11. Root Flag
+
+Once I obtained the root shell, I navigated to the root user's home directory:
+Then:
+The root flag was obtained successfully.
+
+---
+
+--> Attack Chain
+
+The complete attack path was:
+Nmap Enumeration
+       ↓
+Anonymous FTP
+       ↓
+Writable FTP Directory
+       ↓
+Upload Web Shell
+       ↓
+www-data Shell
+       ↓
+PCAP Analysis
+       ↓
+Credential Discovery
+       ↓
+Lennie Account
+       ↓
+User Flag
+       ↓
+Lennie's Writable /etc/print.sh
+       ↓
+Privilege Escalation
+       ↓
+Root Shell
+       ↓
+Root Flag
+
+---
+
+--> Key Lessons Learned
+
+ 1. Always enumerate anonymous FTP
+Anonymous FTP access can expose sensitive files and, if writable, may provide a path to code execution.
+
+2. Don't ignore unusual files
+The suspicious.pcapng file was critical. Packet captures can contain:
+* Credentials
+* HTTP requests
+* URLs
+* Authentication data
+* Commands
+* Network information
+
+3. Check file permissions carefully
+
+This was one of the most important findings:
+-rwx------ 1 lennie lennie /etc/print.sh
+A root-executed script that is writable by a low-privileged user can lead to privilege escalation.
+
+ 4. Reverse shells aren't always proper terminals
+
+A basic Netcat shell may not support programs such as nano. Using:
+python -c 'import pty; pty.spawn("/bin/bash")'
+and
+export TERM=xterm
+can provide a more functional shell.
+
+5. Follow the attack chain
+
+The machine required multiple stages rather than a single exploit:
+FTP → Web Shell → PCAP → Credentials → User → Privilege Escalation → Root
+
+## Flags
+
+| Flag      | Status     |
+| --------- | ---------- |
+| User Flag | ✅ Obtained |
+| Root Flag | ✅ Obtained |
+
+---
+
+## Tools Used
+
+* Nmap
+* FTP
+* Netcat
+* Python
+* Linux enumeration commands
+* Wireshark / PCAP analysis
+* Bash
+
+---
+
+## Disclaimer
+
+This write-up is for educational purposes and documents my experience completing the TryHackMe **Startup** room in an authorized lab environment. Do not use these techniques against systems without explicit permission.
