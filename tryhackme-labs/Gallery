@@ -1,0 +1,181 @@
+TryHackMe — Gallery
+
+Platform: TryHackMe
+Difficulty: Beginner
+Category: Linux / Web / SQL Injection / File Upload / Privilege Escalation
+
+Introduction
+
+Gallery is a beginner-friendly TryHackMe machine that covers several important web exploitation and Linux privilege-escalation techniques. During the enumeration and exploitation process, we encounter SQL Injection, authentication bypass, insecure file upload, shell stabilization, credential discovery, and privilege escalation using a permitted `nano` binary.
+The goal is to enumerate the target, gain an initial foothold, move laterally to the `mike` user, and finally escalate privileges to root.
+
+1. Reconnaissance
+
+I started with an Nmap scan to identify the services running on the target:
+nmap -sC -sV -Pn <TARGET_IP>
+The scan revealed two open web-related ports, including port 80 and port 8080.
+Port 80 was running Apache, indicating that a web server was available.
+I opened the website in a browser and found a page running Simple Image Gallery version 1.0.
+
+2. Authentication Bypass
+
+After investigating the application, I found that the login functionality was vulnerable to SQL Injection.
+A commonly used SQL Injection payload was enough to bypass the authentication:
+admin' OR 1=1 -- -
+The payload changes the SQL condition so that it evaluates as true, allowing access without knowing the legitimate password.
+After submitting the payload, I was successfully logged into the administrator account.
+
+3. Exploiting Insecure File Upload
+
+The Simple Image Gallery application was also vulnerable to insecure file upload, which could be leveraged for remote code execution.
+I searched for a public exploit using SearchSploit:
+searchsploit simple image gallery 1.0
+The available exploit could be used to upload and execute a malicious file.
+After obtaining the exploit, I executed it and used it to establish a reverse shell back to my attacking machine.
+I started a listener:
+nc -lvnp 4445
+Once the connection was received, I had an initial shell on the target.
+
+4. Stabilizing the Shell
+
+The initial shell was limited, so I upgraded it to a more usable interactive Bash shell:
+python3 -c 'import pty; pty.spawn("/bin/bash")'
+This made interaction with the system much easier.
+
+5. Finding Database Credentials
+
+While exploring the application files, I found `initialize.php`.
+cat initialize.php
+The file contained the MySQL database credentials.
+I used those credentials to connect to the database:
+mysql -u <USERNAME> -p
+After connecting, I enumerated the available databases and tables and eventually found the administrator account information, including a password hash.
+Although the hash could be recovered, it did not provide anything particularly useful for further access, so I continued enumerating the system.
+
+6. Privilege Escalation Enumeration
+
+I searched the system for possible privilege-escalation opportunities.
+I also attempted to exploit the Polkit `pkexec` vulnerability known as PwnKit.
+The exploit source was obtained from a public GitHub repository and transferred to the target.
+After downloading the source code, I compiled it:
+gcc -shared PwnKit.c -o PwnKit -Wl,-e,entry -fPIC
+I then transferred the compiled exploit to the target using a temporary Python HTTP server.
+However, the exploit did not work successfully against the machine, suggesting that the required vulnerability was patched or otherwise not exploitable in this environment.
+Instead of continuing with that route, I returned to enumeration.
+
+7. Finding Mike's Credentials
+
+While investigating the filesystem, I discovered that a backup of Mike's home directory was present under:
+/var/backups
+Inside the backup, I found a copy of Mike's Bash history.
+By examining the history file, I discovered credentials that could be used to authenticate as `mike`.
+I then logged in as Mike:
+su mike
+Using the recovered password, I successfully switched to the `mike` account.
+After gaining access to Mike's account, I was able to locate the first flag.
+
+8. Privilege Escalation to Root
+
+Next, I checked which commands Mike could execute with elevated privileges:
+sudo -l
+The output showed that Mike was allowed to execute the following script with root privileges:
+sudo /bin/bash /opt/rootkit.sh
+The important part was that the script could be executed as root.
+The script provided an input mechanism that could be abused to escape the restricted execution environment.
+I checked GTFOBins for possible privilege-escalation techniques and found that `nano` can be abused to obtain a shell when it is executed with elevated privileges.
+By launching `nano` through the permitted root command and escaping from it to a shell, I was able to obtain a root shell.
+I verified the privilege level with:
+whoami
+The result confirmed that I was now:
+root
+With root access obtained, the machine was fully compromised.
+
+9. Conclusion
+
+The Gallery machine was a useful introduction to several common attack techniques.
+The exploitation chain was:
+
+1. Nmap enumeration
+2. Discovery of Simple Image Gallery
+3. SQL Injection authentication bypass
+4. Exploitation of insecure file upload
+5. Reverse shell
+6. Shell stabilization
+7. Discovery of database credentials
+8. Enumeration for privilege escalation
+9. Discovery of Mike's credentials in a backup Bash history
+10. Login as Mike
+11. Abuse of a root-permitted command
+12. `nano` privilege escalation
+13. Root shell
+
+Tools Used
+
+* Nmap — service and version enumeration
+* SearchSploit — searching for public exploits
+* Netcat — reverse shell listener
+* Python — shell stabilization and file transfer
+* MySQL client — database enumeration
+* GCC — compiling the PwnKit exploit
+* GTFOBins — researching Linux privilege-escalation techniques
+* Linux command-line utilities — filesystem and credential enumeration
+
+Commands Learned
+
+```bash
+nmap -sC -sV -Pn <TARGET_IP>
+```
+
+Enumerates services, versions, and default scripts.
+
+```bash
+searchsploit <search-term>
+```
+
+Searches the Exploit-DB database for known exploits.
+
+```bash
+nc -lvnp 4445
+```
+
+Starts a Netcat listener for a reverse shell.
+
+```bash
+python3 -c 'import pty; pty.spawn("/bin/bash")'
+```
+
+Spawns a more interactive Bash shell from a limited shell.
+
+```bash
+mysql -u <USERNAME> -p
+```
+
+Connects to a MySQL server using a username and password.
+
+```bash
+sudo -l
+```
+
+Shows commands the current user is allowed to execute with `sudo`.
+
+```bash
+whoami
+```
+
+Displays the current effective user.
+
+Lessons Learned
+
+This machine reinforced the importance of proper enumeration. A single vulnerability was not enough to complete the box; the attack required combining multiple weaknesses.
+
+The main lessons were:
+
+* Always enumerate web applications carefully.
+* SQL Injection can lead to authentication bypass.
+* File upload functionality must be properly restricted and validated.
+* Application configuration files can expose sensitive credentials.
+* Backup files and shell history can contain reusable passwords.
+* Failed exploits should not stop the enumeration process.
+* `sudo -l` is an important privilege-escalation check.
+* GTFOBins is a valuable resource for researching Linux privilege-escalation techniques.
+* Privilege escalation often depends on chaining several small weaknesses rather than exploiting one major vulnerability.
